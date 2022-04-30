@@ -58,18 +58,17 @@ class ConditionalAutoEncoder(nn.Module):
         self.lstm = attention_vs_lstm != 'attention'
 
         if attention_vs_lstm == 'attention':
+            self.prev_macro = torch.zeros((macro_attention_span, n_factors), requires_grad=True) if starting_macro is None else starting_macro
+            self.prev_rhs   = torch.zeros((rhs_attention_span, n_factors), requires_grad=True) if starting_rhs is None else starting_rhs
             self.macro_attention_span = macro_attention_span
             self.rhs_attention_span = rhs_attention_span
+            #attention_lst = buildListFromConfigs(n_hidden_macro, n_macro+macro_attention_span*n_factors + rhs_attention_span*n_factors, n_factors, batch_norm=True, dropout=dropout_p, initialization=True, nonlinear=nn.SELU)
             attention_lst = buildListFromConfigs(n_hidden_macro, n_macro+macro_attention_span*n_factors + rhs_attention_span*n_factors, n_factors, batch_norm=True, dropout=dropout_p, initialization=True, nonlinear=nn.SELU)
             self.macro = nn.Sequential(attention_lst)
         else:
-            attention_lst = buildListFromConfigs(n_hidden_macro, n_macro+macro_attention_span*n_factors + rhs_attention_span*n_factors, n_factors, batch_norm=True, dropout=dropout_p, initialization=True, nonlinear=nn.SELU)
+            attention_lst = buildListFromConfigs(n_hidden_macro, n_macro, n_factors, batch_norm=True, dropout=dropout_p, initialization=True, nonlinear=nn.SELU)
             self.macro = nn.Sequential(attention_lst)
-            self.macro_lstm = BuildLSTM(n_macro+macro_attention_span*n_factors + rhs_attention_span*n_factors, n_hidden_macro, num_lstm_layers, dropout=dropout_p, proj_size=n_macro)
-
-
-        self.prev_macro = torch.zeros((macro_attention_span, n_factors), requires_grad=True) if starting_macro is None else starting_macro
-        self.prev_rhs   = torch.zeros((rhs_attention_span, n_factors), requires_grad=True) if starting_rhs is None else starting_rhs
+            self.macro_lstm = BuildLSTM(n_factors, n_factors, num_lstm_layers, dropout=dropout_p, proj_size=n_macro)
 
         
         lhs_lst = buildListFromConfigs(n_hidden_lhs, n_alphas, n_factors, batch_norm_lhs, dropout=dropout_p, initialization=True, nonlinear=nn.SELU)
@@ -99,6 +98,7 @@ class ConditionalAutoEncoder(nn.Module):
             y_macro = self.macro(x_macro)
             y_macro, hidden = self.macro_lstm(y_macro, prev_hidden)
         else:
+            # If using Attention, store prev_macro and prev_rhs outside like lstm
             macro = torch.cat((x_macro, self.prev_macro.reshape(1, -1), self.prev_rhs.reshape(1, -1)))
             y_macro = self.macro(macro)
             hidden = None
@@ -108,8 +108,8 @@ class ConditionalAutoEncoder(nn.Module):
         y_lhs = self.run_through_lhs(x_lhs)
         y_rhs = self.rhs(x_rhs).unsqueeze(dim=2)
         self.last_rhs_factors = y_rhs
-        y_macro, hidden = self.run_through_macro(y_macro, prev_hidden)
-        out = torch.sum(y_lhs*y_rhs*y_macro, axis=2) #Double check this
+        y_macro, hidden = self.run_through_macro(x_macro, prev_hidden)
+        out = torch.sum(y_lhs*y_rhs*y_macro, dim=2) #Double check this
         self.prev_macro = torch.roll(self.prev_macro, -1, 0)
         self.prev_macro[-1] = y_macro
         self.prev_rhs = torch.roll(self.prev_rhs, -1, 0)
@@ -119,7 +119,7 @@ class ConditionalAutoEncoder(nn.Module):
     def forward_given_factors(self, x_macro, x_lhs, factors, prev_hidden=None):
         y_lhs = self.run_through_lhs(x_lhs)
         y_rhs = factors
-        y_macro, hidden = self.run_through_macro(y_macro, prev_hidden)
+        y_macro, hidden = self.run_through_macro(x_macro, prev_hidden)
         #out = torch.bmm(y_lhs.transpose(1,2), y_rhs).squeeze(2)
-        out = torch.sum(y_lhs*y_rhs*y_macro, axis=2) #Double check this
+        out = torch.sum(y_lhs*y_rhs*y_macro, dim=2) #Double check this
         return out
